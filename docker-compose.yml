@@ -1,0 +1,86 @@
+# Støttehjulet / tempo — Docker Compose
+# Local:  docker compose up --build
+# Coolify: New Resource → Docker Compose → point at this file (repo root)
+#
+# In Coolify, assign your domain to the `web` service only.
+# Browser traffic hits web:80; /api is proxied to the API container.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aarshjul}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aarshjul}
+      POSTGRES_DB: ${POSTGRES_DB:-aarshjul}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+  api:
+    build: ./api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-aarshjul}:${POSTGRES_PASSWORD:-aarshjul}@db:5432/${POSTGRES_DB:-aarshjul}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production}
+      # Comma-separated. Use * or your Coolify FQDN(s). Same-origin web needs no CORS.
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@korps.example}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin123}
+      SEED_ADMIN_NAME: ${SEED_ADMIN_NAME:-Administrator}
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3848/api/health')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    # Optional: expose API for mobile apps / direct access.
+    # Coolify: leave unpublished unless you need a separate API domain.
+    ports:
+      - "${API_PORT:-3848}:3848"
+    networks:
+      - internal
+
+  web:
+    build:
+      context: ./web
+      args:
+        # Empty = same-origin (/api via nginx). Override only for split-host setups.
+        VITE_API_URL: ${VITE_API_URL:-}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      # Coolify: map your domain to this service (port 80).
+      - "${WEB_PORT:-3847}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - internal
+
+volumes:
+  pgdata:
+
+networks:
+  internal:
+    driver: bridge
